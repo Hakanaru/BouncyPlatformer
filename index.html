@@ -1,0 +1,993 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Bouncy Star Adventure</title>
+    <style>
+        /* Reset and basic styles */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            overflow: hidden;
+            touch-action: none;
+            background: transparent; /* Allow canvas to handle background */
+            font-family: system-ui, sans-serif;
+        }
+        #gameCanvas {
+            width: 100vw;
+            height: 100vh;
+            touch-action: none;
+            display: block;
+            position: absolute;
+            top: 0;
+            left: 0;
+        }
+        #score {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            color: #FFD700;
+            font-size: 24px;
+            z-index: 100;
+            pointer-events: none;
+        }
+        /* Buttons */
+        #pauseButton, #optionsButton {
+            position: fixed;
+            top: 20px;
+            padding: 10px 20px;
+            background: rgba(0, 0, 0, 0.7);
+            color: #FFD700;
+            border: none;
+            border-radius: 5px;
+            font-size: 16px;
+            cursor: pointer;
+            z-index: 100;
+            transition: background 0.3s;
+        }
+        #pauseButton:hover, #optionsButton:hover {
+            background: rgba(0, 0, 0, 0.9);
+        }
+        #pauseButton {
+            left: 20px;
+        }
+        #optionsButton {
+            left: 100px;
+        }
+        /* Star collect animation */
+        .star-collect {
+            position: absolute;
+            pointer-events: none;
+            font-size: 40px;
+            animation: float-up 1s ease-out forwards;
+        }
+        @keyframes float-up {
+            0% { transform: translateY(0); opacity: 1; }
+            100% { transform: translateY(-100px); opacity: 0; }
+        }
+        /* Achievement Badge Animation */
+        @keyframes fade-in-out {
+            0% { opacity: 0; transform: scale(0.5); }
+            50% { opacity: 1; transform: scale(1); }
+            100% { opacity: 0; transform: scale(0.5); }
+        }
+        /* Options Modal */
+        .modal {
+            display: none; /* Hidden by default */
+            position: fixed;
+            z-index: 200;
+            left: 0;
+            top: 0;
+            width: 100%;
+            height: 100%;
+            overflow: auto;
+            background: rgba(0,0,0,0.5); /* Black w/ opacity */
+        }
+        .modal-content {
+            background: #fefefe;
+            margin: 15% auto;
+            padding: 20px;
+            border: 1px solid #888;
+            width: 300px;
+            border-radius: 10px;
+            position: relative;
+        }
+        .modal-content h2 {
+            margin-bottom: 20px;
+            text-align: center;
+        }
+        .modal-content label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+        }
+        .modal-content input[type="color"] {
+            width: 100%;
+            height: 40px;
+            border: none;
+            cursor: pointer;
+            margin-bottom: 20px;
+        }
+        .close {
+            color: #aaa;
+            position: absolute;
+            top: 10px;
+            right: 15px;
+            font-size: 28px;
+            font-weight: bold;
+            cursor: pointer;
+        }
+        .close:hover,
+        .close:focus {
+            color: black;
+            text-decoration: none;
+        }
+    </style>
+</head>
+<body>
+    <canvas id="gameCanvas"></canvas>
+    <div id="score">⭐ 0</div>
+    <button id="pauseButton">Pause</button>
+    <button id="optionsButton">Options</button>
+
+    <!-- Options Modal -->
+    <div id="optionsModal" class="modal">
+        <div class="modal-content">
+            <span class="close">&times;</span>
+            <h2>Options</h2>
+            <label for="ballColor">Ball Color:</label>
+            <input type="color" id="ballColor" name="ballColor" value="#FF6B6B">
+            <label for="trailColor">Trail Color:</label>
+            <input type="color" id="trailColor" name="trailColor" value="#FF6B6B">
+        </div>
+    </div>
+
+    <script>
+    class Game {
+        constructor(canvas, scoreElement) {
+            this.canvas = canvas;
+            this.ctx = canvas.getContext('2d');
+            this.scoreElement = scoreElement;
+            this.devicePixelRatio = window.devicePixelRatio || 1;
+            this.resizeCanvas();
+
+            // Bind methods
+            window.addEventListener('resize', () => this.resizeCanvas());
+            this.handleInput = this.handleInput.bind(this);
+            this.gameLoop = this.gameLoop.bind(this);
+
+            // Game constants
+            this.GRAVITY = 0.5;
+            this.BOUNCE_DAMPING = 0.7;
+            this.HORIZONTAL_DAMPING = 0.99;
+            this.PLATFORM_COUNT = 20; // Increased for larger area
+            this.MIN_PLATFORM_WIDTH = 100;
+            this.MAX_PLATFORM_WIDTH = 200;
+
+            // Virtual world dimensions (adjusted for dynamic background)
+            this.worldWidth = this.canvas.width / this.devicePixelRatio * 2;
+            this.worldHeight = this.canvas.height / this.devicePixelRatio * 3;
+
+            // Camera properties
+            this.camera = {
+                x: 0,
+                y: 0,
+                width: this.canvas.width / this.devicePixelRatio,
+                height: this.canvas.height / this.devicePixelRatio,
+                targetX: 0,
+                targetY: 0,
+                lerpFactor: 0.1
+            };
+
+            // Game objects
+            this.ball = {
+                x: this.worldWidth / 2,
+                y: this.worldHeight / 2,
+                radius: 20,
+                vx: 0,
+                vy: 0,
+                color: '#FF6B6B',
+                scaleX: 1,
+                scaleY: 1
+            };
+
+            this.stars = [];
+            this.MAX_STARS = 3;
+
+            this.platforms = [];
+            this.score = 0;
+            this.particles = [];
+
+            // Input handling
+            this.isDragging = false;
+            this.lastTouchX = 0;
+            this.lastTouchY = 0;
+
+            // Initialize achievements
+            this.achievements = [
+                { name: 'First Star', threshold: 1, earned: false },
+                { name: 'Star Collector', threshold: 5, earned: false },
+                { name: 'Super Star Collector', threshold: 10, earned: false }
+            ];
+
+            // Initialize Dynamic Backgrounds
+            this.backgroundColors = ['#1a1b4b', '#4b1a1a', '#1a4b1a', '#4b4b1a', '#1a4b4b']; // Example colors
+            this.backgroundTransition = {
+                currentColorIndex: 0,
+                nextColorIndex: 1,
+                progress: 0, // 0 to 1
+                speed: 0.001 // Adjust as needed
+            };
+
+            // Initialize Sound Context
+            this.audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+            // State Flags to prevent continuous sounds
+            this.isOnGround = false;
+            this.platformsOnGround = new Set(); // To track platforms currently in contact
+
+            // Initialize visual trails
+            this.ballTrail = []; // Array to store previous positions
+            this.trailColor = '#FF6B6B'; // Default trail color
+            this.trailThreshold = 5; // Velocity threshold to show trail
+
+            // Pause state
+            this.isPaused = false;
+
+            // Reference to UI elements
+            this.pauseButton = document.getElementById('pauseButton');
+            this.optionsButton = document.getElementById('optionsButton');
+            this.optionsModal = document.getElementById('optionsModal');
+            this.closeModal = this.optionsModal.querySelector('.close');
+            this.ballColorInput = document.getElementById('ballColor');
+            this.trailColorInput = document.getElementById('trailColor');
+
+            // Bind UI event listeners
+            this.pauseButton.addEventListener('click', () => this.togglePause());
+            this.optionsButton.addEventListener('click', () => this.openOptions());
+            this.closeModal.addEventListener('click', () => this.closeOptions());
+            window.addEventListener('click', (e) => {
+                if (e.target == this.optionsModal) {
+                    this.closeOptions();
+                }
+            });
+            this.ballColorInput.addEventListener('input', (e) => this.changeBallColor(e));
+            this.trailColorInput.addEventListener('input', (e) => this.changeTrailColor(e));
+
+            this.init();
+        }
+
+        resizeCanvas() {
+            const { devicePixelRatio } = this;
+            this.canvas.width = window.innerWidth * devicePixelRatio;
+            this.canvas.height = window.innerHeight * devicePixelRatio;
+            this.ctx.scale(devicePixelRatio, devicePixelRatio);
+
+            // Update camera dimensions
+            if (this.camera) {
+                this.camera.width = window.innerWidth;
+                this.camera.height = window.innerHeight;
+            }
+
+            // Update virtual world dimensions
+            this.worldWidth = this.canvas.width / devicePixelRatio * 2;
+            this.worldHeight = this.canvas.height / devicePixelRatio * 3;
+        }
+
+        init() {
+            this.generatePlatforms();
+            this.placeNewStars(); // Updated to place multiple stars
+            this.setupInput();
+            this.addCSS(); // Add CSS for achievements
+            requestAnimationFrame(this.gameLoop);
+        }
+
+        generatePlatforms() {
+            this.platforms = [];
+            for (let i = 0; i < this.PLATFORM_COUNT; i++) {
+                const width = this.MIN_PLATFORM_WIDTH + Math.random() * (this.MAX_PLATFORM_WIDTH - this.MIN_PLATFORM_WIDTH);
+                const x = Math.random() * (this.worldWidth - width);
+                const y = Math.random() * (this.worldHeight - 100) + 50; // Avoid placing too close to edges
+
+                this.platforms.push({
+                    id: i, // Unique identifier for each platform
+                    x,
+                    y,
+                    width,
+                    height: 15,
+                    color: '#4ECDC4'
+                });
+            }
+        }
+
+        placeNewStars() {
+            this.stars = [];
+            const starCount = Math.floor(Math.random() * this.MAX_STARS) + 1; // 1 to 3 stars
+            for (let i = 0; i < starCount; i++) {
+                const platform = this.platforms[Math.floor(Math.random() * this.platforms.length)];
+                const star = {
+                    x: platform.x + platform.width / 2 + (Math.random() - 0.5) * 50,
+                    y: platform.y - 50 + (Math.random() - 0.5) * 50,
+                    radius: 20,
+                    collected: false
+                };
+                this.stars.push(star);
+            }
+        }
+
+        createStarCollectEffect(x, y) {
+            for (let i = 0; i < 15; i++) { // Increased particles for better effect
+                this.particles.push({
+                    x,
+                    y,
+                    vx: (Math.random() - 0.5) * 10,
+                    vy: (Math.random() - 0.5) * 10,
+                    life: 1,
+                    color: '#FFD700'
+                });
+            }
+        }
+
+        updateParticles() {
+            for (let i = this.particles.length - 1; i >= 0; i--) {
+                const p = this.particles[i];
+                p.x += p.vx;
+                p.y += p.vy;
+                p.life -= 0.02;
+
+                if (p.life <= 0) {
+                    this.particles.splice(i, 1);
+                }
+            }
+        }
+
+        // Generate a simple beep sound
+        playSound(frequency, duration) {
+            const oscillator = this.audioCtx.createOscillator();
+            const gainNode = this.audioCtx.createGain();
+
+            oscillator.connect(gainNode);
+            gainNode.connect(this.audioCtx.destination);
+
+            oscillator.type = 'sine';
+            oscillator.frequency.setValueAtTime(frequency, this.audioCtx.currentTime); // Frequency in Hz
+            gainNode.gain.setValueAtTime(0.1, this.audioCtx.currentTime); // Volume
+
+            oscillator.start();
+            oscillator.stop(this.audioCtx.currentTime + duration);
+        }
+
+        // Helper function to interpolate between two colors
+        interpolateColor(color1, color2, factor) {
+            // Convert hex to RGB
+            const hexToRGB = (hex) => {
+                const bigint = parseInt(hex.slice(1), 16);
+                return {
+                    r: (bigint >> 16) & 255,
+                    g: (bigint >> 8) & 255,
+                    b: bigint & 255
+                };
+            };
+            
+            const rgb1 = hexToRGB(color1);
+            const rgb2 = hexToRGB(color2);
+            
+            const r = Math.round(rgb1.r + (rgb2.r - rgb1.r) * factor);
+            const g = Math.round(rgb1.g + (rgb2.g - rgb1.g) * factor);
+            const b = Math.round(rgb1.b + (rgb2.b - rgb1.b) * factor);
+            
+            return `rgb(${r}, ${g}, ${b})`;
+        }
+
+        updateBackgroundTransition() {
+            this.backgroundTransition.progress += this.backgroundTransition.speed;
+            if (this.backgroundTransition.progress >= 1) {
+                this.backgroundTransition.currentColorIndex = this.backgroundTransition.nextColorIndex;
+                this.backgroundTransition.nextColorIndex = (this.backgroundTransition.nextColorIndex + 1) % this.backgroundColors.length;
+                this.backgroundTransition.progress = 0;
+            }
+        }
+
+        updateBallPhysics() {
+            if (this.isPaused) return; // Do not update physics if paused
+
+            // Apply gravity
+            this.ball.vy += this.GRAVITY;
+            this.ball.x += this.ball.vx;
+            this.ball.y += this.ball.vy;
+            this.ball.vx *= this.HORIZONTAL_DAMPING;
+
+            // Calculate speed
+            const speed = Math.hypot(this.ball.vx, this.ball.vy);
+
+            // Store previous ground state
+            const wasOnGround = this.isOnGround;
+
+            // Collision with virtual world boundaries
+            // Left and Right
+            if (this.ball.x - this.ball.radius < 0) {
+                this.ball.x = this.ball.radius;
+                this.ball.vx *= -this.BOUNCE_DAMPING;
+                this.playBounceSound();
+            }
+            if (this.ball.x + this.ball.radius > this.worldWidth) {
+                this.ball.x = this.worldWidth - this.ball.radius;
+                this.ball.vx *= -this.BOUNCE_DAMPING;
+                this.playBounceSound();
+            }
+
+            // Top and Bottom
+            if (this.ball.y - this.ball.radius < 0) {
+                this.ball.y = this.ball.radius;
+                this.ball.vy *= -this.BOUNCE_DAMPING;
+                this.playBounceSound();
+            }
+            if (this.ball.y + this.ball.radius > this.worldHeight) {
+                this.ball.y = this.worldHeight - this.ball.radius;
+                this.ball.vy *= -this.BOUNCE_DAMPING;
+
+                // Update ground state
+                this.isOnGround = true;
+
+                // Play bounce sound only if transitioning from air to ground
+                if (!wasOnGround) {
+                    this.playBounceSound();
+                }
+            } else {
+                // Not on ground
+                this.isOnGround = false;
+            }
+
+            // Platform collisions
+            this.platforms.forEach(platform => {
+                const isColliding = this.ball.vy > 0 && // Moving downward
+                    this.ball.y + this.ball.radius > platform.y &&
+                    this.ball.y - this.ball.radius < platform.y + platform.height &&
+                    this.ball.x > platform.x &&
+                    this.ball.x < platform.x + platform.width;
+
+                if (isColliding) {
+                    this.ball.y = platform.y - this.ball.radius;
+                    this.ball.vy *= -this.BOUNCE_DAMPING;
+
+                    // Play bounce sound only if the ball was not already on this platform
+                    if (!this.platformsOnGround.has(platform.id)) {
+                        this.playBounceSound();
+                        this.platformsOnGround.add(platform.id);
+                    }
+
+                    // Squish effect
+                    const squishScale = Math.min(1.3, Math.abs(this.ball.vy) / 15);
+                    this.ball.scaleX = 1 + squishScale;
+                    this.ball.scaleY = 1 - squishScale * 0.5;
+
+                    setTimeout(() => {
+                        this.ball.scaleX = 1;
+                        this.ball.scaleY = 1;
+                    }, 100);
+                } else {
+                    // Remove platform from ground set if not colliding
+                    if (this.platformsOnGround.has(platform.id)) {
+                        this.platformsOnGround.delete(platform.id);
+                    }
+                }
+            });
+
+            // Star collection
+            this.stars.forEach((star, index) => {
+                if (!star.collected &&
+                    Math.hypot(this.ball.x - star.x, this.ball.y - star.y) < this.ball.radius + star.radius) {
+                    star.collected = true;
+                    this.score++;
+                    this.updateScore();
+                    this.createStarCollectEffect(star.x, star.y);
+                    this.showStarCollectAnimation(star.x, star.y);
+                    this.playCollectSound();
+
+                    this.checkAchievements();
+
+                    // Change background when a level is completed
+                    if (this.stars.length === 1) { // Last star being collected
+                        this.changeBackground();
+                    }
+
+                    // Remove collected star after effect
+                    setTimeout(() => {
+                        this.stars.splice(index, 1);
+                    }, 1000);
+                }
+            });
+
+            // Check if all stars are collected to generate new level
+            if (this.stars.length === 0) {
+                setTimeout(() => {
+                    this.generatePlatforms();
+                    this.placeNewStars();
+                    this.resetBallPosition();
+                }, 1000);
+            }
+
+            // Update ball trail only if speed exceeds threshold
+            if (speed > this.trailThreshold) {
+                this.ballTrail.push({ x: this.ball.x, y: this.ball.y });
+                if (this.ballTrail.length > 10) { // Limit trail length
+                    this.ballTrail.shift();
+                }
+            } else {
+                // Optionally, clear trail if speed is low
+                this.ballTrail = [];
+            }
+        }
+
+        resetBallPosition() {
+            this.ball.x = this.worldWidth / 2;
+            this.ball.y = this.worldHeight / 2;
+            this.ball.vx = 0;
+            this.ball.vy = 0;
+            this.isOnGround = false;
+            this.platformsOnGround.clear();
+            this.ballTrail = []; // Clear trail on reset
+        }
+
+        updateScore() {
+            this.scoreElement.textContent = `⭐ ${this.score}`;
+        }
+
+        showStarCollectAnimation(x, y) {
+            const starEmoji = document.createElement('div');
+            starEmoji.textContent = '⭐';
+            starEmoji.className = 'star-collect';
+            // Convert world coordinates to screen coordinates
+            const screenX = x - this.camera.x;
+            const screenY = y - this.camera.y;
+            starEmoji.style.left = `${screenX}px`;
+            starEmoji.style.top = `${screenY}px`;
+            document.body.appendChild(starEmoji);
+            setTimeout(() => starEmoji.remove(), 1000);
+        }
+
+        checkAchievements() {
+            this.achievements.forEach(achievement => {
+                if (!achievement.earned && this.score >= achievement.threshold) {
+                    achievement.earned = true;
+                    this.showAchievementBadge(achievement.name);
+                }
+            });
+        }
+
+        showAchievementBadge(name) {
+            const badge = document.createElement('div');
+            badge.textContent = `🏆 ${name}`;
+            badge.className = 'achievement-badge';
+            badge.style.position = 'absolute';
+            badge.style.left = `${Math.random() * window.innerWidth}px`;
+            badge.style.top = `${Math.random() * window.innerHeight}px`;
+            badge.style.background = 'rgba(0, 0, 0, 0.7)';
+            badge.style.color = '#FFD700';
+            badge.style.padding = '10px 20px';
+            badge.style.borderRadius = '10px';
+            badge.style.fontSize = '20px';
+            badge.style.animation = 'fade-in-out 3s forwards';
+            document.body.appendChild(badge);
+            setTimeout(() => badge.remove(), 3000);
+        }
+
+        setupInput() {
+            this.canvas.addEventListener('mousedown', this.handleInput);
+            this.canvas.addEventListener('mousemove', this.handleInput);
+            this.canvas.addEventListener('mouseup', () => this.isDragging = false);
+            this.canvas.addEventListener('touchstart', this.handleInput);
+            this.canvas.addEventListener('touchmove', this.handleInput);
+            this.canvas.addEventListener('touchend', () => this.isDragging = false);
+        }
+
+        handleInput(e) {
+            e.preventDefault();
+            const pos = e.touches ? e.touches[0] : e;
+            if (e.type === 'mousedown' || e.type === 'touchstart') {
+                this.isDragging = true;
+                this.lastTouchX = pos.clientX;
+                this.lastTouchY = pos.clientY;
+            } else if (e.type === 'mousemove' || e.type === 'touchmove') {
+                if (!this.isDragging) return;
+                const dx = pos.clientX - this.lastTouchX;
+                const dy = pos.clientY - this.lastTouchY;
+
+                // Adjust sensitivity by reducing the influence
+                this.ball.vx += dx * 0.05;
+                this.ball.vy += dy * 0.05;
+
+                this.lastTouchX = pos.clientX;
+                this.lastTouchY = pos.clientY;
+            }
+        }
+
+        updateCamera() {
+            if (this.isPaused) return; // Do not update camera if paused
+
+            // Set camera target to ball's position minus half the screen
+            this.camera.targetX = this.ball.x - this.camera.width / 2;
+            this.camera.targetY = this.ball.y - this.camera.height / 2;
+
+            // Clamp camera within world boundaries
+            this.camera.targetX = Math.max(0, Math.min(this.camera.targetX, this.worldWidth - this.camera.width));
+            this.camera.targetY = Math.max(0, Math.min(this.camera.targetY, this.worldHeight - this.camera.height));
+
+            // Smoothly interpolate camera position
+            this.camera.x += (this.camera.targetX - this.camera.x) * this.camera.lerpFactor;
+            this.camera.y += (this.camera.targetY - this.camera.y) * this.camera.lerpFactor;
+        }
+
+        drawBoundaries() {
+            this.ctx.save();
+            this.ctx.strokeStyle = '#FFFFFF';
+            this.ctx.lineWidth = 5;
+            this.ctx.strokeRect(0, 0, this.worldWidth, this.worldHeight);
+            this.ctx.restore();
+        }
+
+        drawStar() {
+            this.stars.forEach(star => {
+                if (!star.collected) {
+                    const spikes = 5;
+                    const outerRadius = star.radius;
+                    const innerRadius = star.radius / 2;
+
+                    this.ctx.save(); // Save context to apply glow to each star
+                    this.ctx.shadowColor = '#FFD700';
+                    this.ctx.shadowBlur = 15;
+
+                    this.ctx.beginPath();
+                    this.ctx.fillStyle = '#FFD700';
+
+                    for (let i = 0; i < spikes * 2; i++) {
+                        const radius = i % 2 === 0 ? outerRadius : innerRadius;
+                        const angle = (Math.PI * i) / spikes;
+                        const px = star.x + Math.cos(angle) * radius;
+                        const py = star.y + Math.sin(angle) * radius;
+
+                        if (i === 0) this.ctx.moveTo(px, py);
+                        else this.ctx.lineTo(px, py);
+                    }
+
+                    this.ctx.closePath();
+                    this.ctx.fill();
+
+                    // Reset shadow
+                    this.ctx.shadowBlur = 0;
+                    this.ctx.restore();
+                }
+            });
+        }
+
+        drawDirectionalArrow() {
+            this.stars.forEach(star => {
+                if (!star.collected) {
+                    const angle = Math.atan2(star.y - this.ball.y, star.x - this.ball.x);
+                    const arrowLength = 40;
+                    const arrowWidth = 10;
+
+                    this.ctx.save();
+                    this.ctx.translate(this.ball.x, this.ball.y);
+                    this.ctx.rotate(angle);
+
+                    // Draw arrow line
+                    this.ctx.strokeStyle = '#FFFFFF';
+                    this.ctx.lineWidth = 4;
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(0, 0);
+                    this.ctx.lineTo(arrowLength, 0);
+                    this.ctx.stroke();
+
+                    // Draw arrowhead
+                    this.ctx.beginPath();
+                    this.ctx.moveTo(arrowLength, 0);
+                    this.ctx.lineTo(arrowLength - arrowWidth, arrowWidth / 2);
+                    this.ctx.lineTo(arrowLength - arrowWidth, -arrowWidth / 2);
+                    this.ctx.closePath();
+                    this.ctx.fillStyle = '#FFFFFF';
+                    this.ctx.fill();
+
+                    this.ctx.restore();
+                }
+            });
+        }
+
+        drawAchievementBadge() {
+            // Achievements are handled via DOM elements in showAchievementBadge()
+        }
+
+        // Change background color based on level with smooth transitions
+        changeBackground() {
+            // Already handled in render via backgroundTransition
+            // This function can be used to trigger any additional background features
+            // TODO: Add additional dynamic background features here if needed
+        }
+
+        render() {
+            if (this.isPaused) return; // Do not render if paused
+
+            // Update background transition
+            this.updateBackgroundTransition();
+
+            // Interpolate between current and next background colors
+            const bg1 = this.backgroundColors[this.backgroundTransition.currentColorIndex];
+            const bg2 = this.backgroundColors[this.backgroundTransition.nextColorIndex];
+            const bgColor = this.interpolateColor(bg1, bg2, this.backgroundTransition.progress);
+
+            // Draw the background
+            this.ctx.fillStyle = bgColor;
+            this.ctx.fillRect(0, 0, this.worldWidth, this.worldHeight);
+
+            // Draw visual trails
+            this.ballTrail.forEach((pos, index) => {
+                const trailAlpha = (index + 1) / this.ballTrail.length * 0.5; // Decreasing opacity
+                this.ctx.save();
+                this.ctx.globalAlpha = trailAlpha;
+                this.ctx.fillStyle = this.trailColor;
+                this.ctx.beginPath();
+                this.ctx.arc(pos.x, pos.y, this.ball.radius, 0, Math.PI * 2);
+                this.ctx.fill();
+                this.ctx.restore();
+            });
+
+            // Save the context and translate based on camera
+            this.ctx.save();
+            this.ctx.translate(-this.camera.x, -this.camera.y);
+
+            // Draw boundaries
+            this.drawBoundaries();
+
+            // Draw platforms with shadow
+            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowOffsetY = 5;
+
+            this.platforms.forEach(platform => {
+                this.ctx.fillStyle = platform.color;
+                this.ctx.beginPath();
+                this.ctx.roundRect(platform.x, platform.y, platform.width, platform.height, 8);
+                this.ctx.fill();
+            });
+
+            // Reset shadow
+            this.ctx.shadowColor = 'transparent';
+            this.ctx.shadowBlur = 0;
+            this.ctx.shadowOffsetY = 0;
+
+            // Draw stars
+            if (this.stars.length > 0) {
+                this.drawStar();
+            }
+
+            // Draw particles
+            this.particles.forEach(p => {
+                this.ctx.fillStyle = `rgba(255, 215, 0, ${p.life})`;
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            });
+
+            // Draw ball with squish and glow effects
+            this.ctx.save();
+            this.ctx.translate(this.ball.x, this.ball.y);
+            this.ctx.scale(this.ball.scaleX, this.ball.scaleY);
+
+            // Ball glow
+            this.ctx.shadowColor = this.ball.color;
+            this.ctx.shadowBlur = 20;
+
+            // Ball gradient
+            const gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, this.ball.radius);
+            gradient.addColorStop(0, '#FF8B8B');
+            gradient.addColorStop(1, this.ball.color);
+
+            this.ctx.fillStyle = gradient;
+            this.ctx.beginPath();
+            this.ctx.arc(0, 0, this.ball.radius, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            // Ball highlight
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            this.ctx.beginPath();
+            this.ctx.arc(-this.ball.radius * 0.2, -this.ball.radius * 0.2, this.ball.radius * 0.4, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            this.ctx.restore(); // Restore to remove shadow settings
+
+            // Restore context
+            this.ctx.restore();
+
+            // Draw directional arrow
+            if (this.stars.length > 0) {
+                this.drawDirectionalArrow();
+            }
+
+            // Draw achievement badges are handled via DOM elements
+        }
+
+        updateCamera() {
+            if (this.isPaused) return; // Do not update camera if paused
+
+            // Set camera target to ball's position minus half the screen
+            this.camera.targetX = this.ball.x - this.camera.width / 2;
+            this.camera.targetY = this.ball.y - this.camera.height / 2;
+
+            // Clamp camera within world boundaries
+            this.camera.targetX = Math.max(0, Math.min(this.camera.targetX, this.worldWidth - this.camera.width));
+            this.camera.targetY = Math.max(0, Math.min(this.camera.targetY, this.worldHeight - this.camera.height));
+
+            // Smoothly interpolate camera position
+            this.camera.x += (this.camera.targetX - this.camera.x) * this.camera.lerpFactor;
+            this.camera.y += (this.camera.targetY - this.camera.y) * this.camera.lerpFactor;
+        }
+
+        // Play bounce sound
+        playBounceSound() {
+            // Frequency: 200 Hz, Duration: 0.1 seconds
+            this.playSound(200, 0.1);
+        }
+
+        // Play collect sound
+        playCollectSound() {
+            // Frequency: 400 Hz, Duration: 0.2 seconds
+            this.playSound(400, 0.2);
+        }
+
+        togglePause() {
+            this.isPaused = !this.isPaused;
+            this.pauseButton.textContent = this.isPaused ? 'Resume' : 'Pause';
+            if (!this.isPaused) {
+                requestAnimationFrame(this.gameLoop);
+            }
+        }
+
+        openOptions() {
+            this.optionsModal.style.display = 'block';
+        }
+
+        closeOptions() {
+            this.optionsModal.style.display = 'none';
+        }
+
+        changeBallColor(event) {
+            this.ball.color = event.target.value;
+        }
+
+        changeTrailColor(event) {
+            this.trailColor = event.target.value;
+        }
+
+        render() {
+            if (this.isPaused) return; // Do not render if paused
+
+            // Update background transition
+            this.updateBackgroundTransition();
+
+            // Interpolate between current and next background colors
+            const bg1 = this.backgroundColors[this.backgroundTransition.currentColorIndex];
+            const bg2 = this.backgroundColors[this.backgroundTransition.nextColorIndex];
+            const bgColor = this.interpolateColor(bg1, bg2, this.backgroundTransition.progress);
+
+            // Draw the background
+            this.ctx.fillStyle = bgColor;
+            this.ctx.fillRect(0, 0, this.worldWidth, this.worldHeight);
+
+            // Draw visual trails only if ball has high momentum
+            this.ballTrail.forEach((pos, index) => {
+                const trailAlpha = (index + 1) / this.ballTrail.length * 0.5; // Decreasing opacity
+                this.ctx.save();
+                this.ctx.globalAlpha = trailAlpha;
+                this.ctx.fillStyle = this.trailColor;
+                this.ctx.beginPath();
+                this.ctx.arc(pos.x, pos.y, this.ball.radius, 0, Math.PI * 2);
+                this.ctx.fill();
+                this.ctx.restore();
+            });
+
+            // Save the context and translate based on camera
+            this.ctx.save();
+            this.ctx.translate(-this.camera.x, -this.camera.y);
+
+            // Draw boundaries
+            this.drawBoundaries();
+
+            // Draw platforms with shadow
+            this.ctx.shadowColor = 'rgba(0, 0, 0, 0.2)';
+            this.ctx.shadowBlur = 10;
+            this.ctx.shadowOffsetY = 5;
+
+            this.platforms.forEach(platform => {
+                this.ctx.fillStyle = platform.color;
+                this.ctx.beginPath();
+                this.ctx.roundRect(platform.x, platform.y, platform.width, platform.height, 8);
+                this.ctx.fill();
+            });
+
+            // Reset shadow
+            this.ctx.shadowColor = 'transparent';
+            this.ctx.shadowBlur = 0;
+            this.ctx.shadowOffsetY = 0;
+
+            // Draw stars
+            if (this.stars.length > 0) {
+                this.drawStar();
+            }
+
+            // Draw particles
+            this.particles.forEach(p => {
+                this.ctx.fillStyle = `rgba(255, 215, 0, ${p.life})`;
+                this.ctx.beginPath();
+                this.ctx.arc(p.x, p.y, 3, 0, Math.PI * 2);
+                this.ctx.fill();
+            });
+
+            // Draw ball with squish and glow effects
+            this.ctx.save();
+            this.ctx.translate(this.ball.x, this.ball.y);
+            this.ctx.scale(this.ball.scaleX, this.ball.scaleY);
+
+            // Ball glow
+            this.ctx.shadowColor = this.ball.color;
+            this.ctx.shadowBlur = 20;
+
+            // Ball gradient
+            const gradient = this.ctx.createRadialGradient(0, 0, 0, 0, 0, this.ball.radius);
+            gradient.addColorStop(0, '#FF8B8B');
+            gradient.addColorStop(1, this.ball.color);
+
+            this.ctx.fillStyle = gradient;
+            this.ctx.beginPath();
+            this.ctx.arc(0, 0, this.ball.radius, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            // Ball highlight
+            this.ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+            this.ctx.beginPath();
+            this.ctx.arc(-this.ball.radius * 0.2, -this.ball.radius * 0.2, this.ball.radius * 0.4, 0, Math.PI * 2);
+            this.ctx.fill();
+
+            this.ctx.restore(); // Restore to remove shadow settings
+
+            // Restore context
+            this.ctx.restore();
+
+            // Draw directional arrow
+            if (this.stars.length > 0) {
+                this.drawDirectionalArrow();
+            }
+
+            // Draw achievement badges are handled via DOM elements
+        }
+
+        gameLoop() {
+            this.updateBallPhysics();
+            this.updateParticles();
+            this.updateCamera();
+            this.render();
+            if (!this.isPaused) {
+                requestAnimationFrame(this.gameLoop);
+            }
+        }
+
+        addCSS() {
+            // Ensure the keyframe for fade-in-out is present
+            const style = document.createElement('style');
+            style.innerHTML = `
+                @keyframes fade-in-out {
+                    0% { opacity: 0; transform: scale(0.5); }
+                    50% { opacity: 1; transform: scale(1); }
+                    100% { opacity: 0; transform: scale(0.5); }
+                }
+            `;
+            document.head.appendChild(style);
+        }
+    }
+
+    // Initialize the game
+    const canvas = document.getElementById('gameCanvas');
+    const scoreElement = document.getElementById('score');
+    const game = new Game(canvas, scoreElement);
+    </script>
+</body>
+</html>
